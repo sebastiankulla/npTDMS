@@ -214,7 +214,7 @@ class DaqMxMetadata(object):
         # There is one element per acquisition card, as data is interleaved
         # separately for each card.
         raw_data_widths_length = types.Uint32.read(f, endianness)
-        self.raw_data_widths = np.zeros(raw_data_widths_length, dtype=np.int32)
+        self.raw_data_widths = np.zeros(raw_data_widths_length, dtype=np.uint32)
         for width_idx in range(raw_data_widths_length):
             self.raw_data_widths[width_idx] = types.Uint32.read(f, endianness)
 
