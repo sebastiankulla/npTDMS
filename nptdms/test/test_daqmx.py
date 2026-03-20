@@ -1001,6 +1001,76 @@ def test_daqmx_debug_logging(caplog):
     assert "data_type=Int16" in caplog.text
 
 
+# Tests for numpy 2.0 compatibility fixes
+
+def test_daqmx_raw_data_widths_dtype_is_uint32():
+    """raw_data_widths must use uint32 so values > 2^31-1 don't overflow (numpy 2.0 fix)"""
+    import struct
+    from io import BytesIO
+    from nptdms.daqmx import DaqMxMetadata, FORMAT_CHANGING_SCALER
+    from nptdms import types
+
+    # Build a minimal byte stream that DaqMxMetadata.__init__ can parse:
+    # dimension (L) + chunk_size (Q) + scaler_vector_length (L) = 16 bytes,
+    # followed by one DaqMxScaler (20 bytes: 5 x uint32),
+    # then raw_data_widths_length (uint32) + one width value (uint32 > 2^31).
+    large_width = 2**31  # would silently overflow if dtype were int32
+    buf = BytesIO()
+    buf.write(struct.pack("<LQL", 1, 4, 1))       # dimension=1, chunk_size=4, scaler_count=1
+    # DaqMxScaler: data_type_code, raw_buffer_index, raw_byte_offset, sample_format_bitmap, scale_id
+    buf.write(struct.pack("<LLLLL", 3, 0, 0, 0, 0))  # type 3 = Int16
+    buf.write(struct.pack("<I", 1))               # raw_data_widths_length = 1
+    buf.write(struct.pack("<I", large_width))     # width value that overflows int32
+    buf.seek(0)
+
+    meta = DaqMxMetadata(buf, "<", FORMAT_CHANGING_SCALER, types.DaqMxRawData)
+    assert meta.raw_data_widths.dtype == np.dtype("uint32"), (
+        "raw_data_widths must be uint32 to avoid overflow with large values"
+    )
+    assert meta.raw_data_widths[0] == large_width
+
+
+def test_daqmx_i16_channel_reads_correct_values_numpy2():
+    """I16 DAQmx channel data is read correctly (exercises from_bytes numpy 2.0 path)"""
+    scaler_metadata = daqmx_scaler_metadata(0, 3, 0)
+    metadata = segment_objects_metadata(
+        root_metadata(),
+        group_metadata(),
+        daqmx_channel_metadata("Channel1", 4, [2], [scaler_metadata]))
+    data = (
+        "01 00"
+        "FF FF"
+        "7F 00"
+        "80 FF"
+    )
+
+    test_file = GeneratedFile()
+    test_file.add_segment(segment_toc(), metadata, data)
+    tdms_data = test_file.load()
+
+    result = tdms_data["Group"]["Channel1"].raw_data
+    assert result.dtype == np.int16
+    np.testing.assert_array_equal(result, [1, -1, 127, -128])
+
+
+def test_daqmx_i8_scaler_reads_correct_values_numpy2():
+    """I8 DAQmx scaler data is read correctly (Int8 was the type that triggered the original bug)"""
+    scaler_metadata = daqmx_scaler_metadata(0, 1, 0)
+    metadata = segment_objects_metadata(
+        root_metadata(),
+        group_metadata(),
+        daqmx_channel_metadata("Channel1", 4, [1], [scaler_metadata]))
+    data = "01 FF 7F 80"
+
+    test_file = GeneratedFile()
+    test_file.add_segment(segment_toc(), metadata, data)
+    tdms_data = test_file.load()
+
+    result = tdms_data["Group"]["Channel1"].raw_data
+    assert result.dtype == np.int8
+    np.testing.assert_array_equal(result, [1, -1, 127, -128])
+
+
 def segment_toc():
     return (
         "kTocMetaData", "kTocRawData", "kTocNewObjList", "kTocDAQmxRawData")
