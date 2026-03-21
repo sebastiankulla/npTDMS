@@ -227,6 +227,10 @@ class Boolean(StructType):
     size = 1
     struct_declaration = "b"
 
+    def __init__(self, value):
+        super(Boolean, self).__init__(int(value))
+        self.value = bool(value)
+
     @classmethod
     def read(cls, file, endianness="<"):
         return bool(super(Boolean, cls).read(file, endianness))
